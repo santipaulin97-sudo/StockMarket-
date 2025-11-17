@@ -1,79 +1,71 @@
 📈 StockMarket — Automated Daily Market Report Bot
 
-This project is an automated financial reporting bot that runs every day at 9:00 AM, generating a complete market summary for the Top Global Stocks, Major Indexes, Global Indicators, and Sector ETFs.
-The bot performs AI-based sentiment analysis, creates a 3-month performance chart, builds a full HTML report, and sends it via email.
+Un bot que genera todos los días a las 9:00 AM un reporte completo del mercado global: índices, acciones, sectores e indicadores macro — todo automáticamente.
 
-🚀 Features
-✅ Daily Automatic Execution (Cron)
+🚀 What It Does
 
-Runs every morning and generates a fresh market report without manual intervention.
+🔷 Daily Automated Run (Cron)
+Generates a fresh market report every morning — no manual work.
 
-✅ Data Collection via Yahoo Finance
+🔷 Smart Data Collection (Yahoo Finance)
+Fetches:
 
-Uses yfinance to download:
+Major U.S. indices
 
-Major U.S. indices (S&P 500, Dow Jones)
+Global macro indicators (VIX, rates, gold, oil)
 
-Global macro indicators (VIX, 10-year rates, Gold, Oil)
+Sector ETFs
 
-Sector ETFs (Tech, Financials, Energy, Health)
+Top global stocks (AAPL, MSFT, NVDA, GOOGL, MELI, TSLA…)
 
-Top 20 global stocks (example: AAPL, MSFT, NVDA, GOOGL, MELI, TSLA…)
+🔷 AI Sentiment Analysis
+Interprets the market environment:
 
-✅ AI Sentiment Summary
+Risk-On / Risk-Off
 
-Automatically interprets:
+Volatility context
 
-Market risk appetite (Risk-On / Risk-Off)
+Inflation & macro pressure
 
-Volatility conditions
-
-Inflation / macroeconomic pressures
-
-Behavioral signals from gold, oil, interest rates
-
-Generates readable insights for non-technical users
+Commodity + rates behavior
 
 Example:
 
-“Calm session with limited volatility. No clear trend detected today. Tags: Neutral.”
+“Calm session with low volatility and no major trend. Tags: Neutral.”
 
-✅ 3-Month Normalized Performance Chart
+🔷 3-Month Performance Chart
+A clean, normalized chart comparing all tracked tickers.
 
-Generates a combined chart comparing the performance of all tracked stocks over the last 3 months.
+🔷 HTML Email Report
+Fully formatted daily email including:
 
-✅ HTML Email Report
+Index performance
 
-Beautifully formatted HTML report including:
-
-Main indices table
-
-Global indicators table
+Global indicators
 
 Sector ETF heatmap
 
-Stock performance (Daily / Monthly / YTD)
+Daily / Monthly / YTD stock returns
 
-24h prediction using linear regression + momentum
+24h prediction (regression + momentum)
 
 Inline embedded chart
 
-✅ Error-Resistant Architecture
+🔷 Robust Architecture
+Retry-safe downloader prevents API failures.
 
-Custom safe_download() function with retries to avoid API failures.
-
-🧠 Technologies
+🧠 Tech Stack
 
 Python
 
-Yahoo Finance API (yfinance)
+Yahoo Finance (yfinance)
 
-NumPy + Pandas
+Pandas + NumPy
 
 Matplotlib
 
-NLP Sentiment Logic
+Custom NLP logic
 
-SMTP Email Automation
+SMTP automation
 
-Cron Scheduling
+Cron scheduling
