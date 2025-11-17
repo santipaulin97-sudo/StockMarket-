@@ -1,0 +1,512 @@
+import yfinance as yf
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+import time
+import matplotlib.pyplot as plt
+from io import BytesIO
+
+# ============================
+# CONFIGURACIÓN
+# ============================
+TICKERS = ["AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "MELI"]
+
+INDEXES_PRINCIPALES = {
+    "^GSPC": "S&P 500",
+    "^DJI": "Dow Jones"
+}
+INDEXES_GLOBALES = {
+    "^VIX": "VIX (Volatilidad)",
+    "^TNX": "Tasa 10 Años (x100)",
+    "GC=F": "Oro (Futuros)",
+    "CL=F": "Petróleo WTI (Futuros)"
+}
+SECTOR_ETFS = {
+    "XLK": "Tecnología",
+    "XLF": "Financiero",
+    "XLV": "Salud",
+    "XLE": "Energía",
+    "XLY": "Consumo"
+}
+
+
+# ============================
+# COLORES POR TICKER
+# ============================
+TICKER_COLORS = {
+    "AAPL": "#1d4ed8",   # azul
+    "MSFT": "#16a34a",   # verde
+    "NVDA": "#eab308",   # amarillo
+    "GOOGL": "#0284c7",  # celeste
+    "META": "#7c3aed",   # violeta
+    "AMZN": "#fb923c",   # naranja
+    "TSLA": "#dc2626",   # rojo
+    "MELI": "#0f172a"    # azul oscuro
+}
+
+# ============================
+# DESCARGA ROBUSTA
+# ============================
+def safe_download(ticker, max_retries=2, wait=1, **kwargs):
+    for attempt in range(max_retries + 1):
+        try:
+            df = yf.download(ticker, auto_adjust=False, progress=False, **kwargs)
+            if df is not None and not df.empty and len(df) >= 2:
+                return df
+        except Exception:
+            time.sleep(wait)
+    return None
+
+# ============================
+# PREDICCIÓN SIMPLE
+# ============================
+def predict_price(df):
+    try:
+        if df is None or len(df) < 5:
+            return None, None
+        prices = np.array(df["Close"].iloc[-10:].astype(float).values)
+        if prices.size < 3:
+            return None, None
+
+        x = np.arange(len(prices))
+        coef = np.polyfit(x, prices, 1)
+
+        trend = coef[0] * (len(prices)) + coef[1]
+        momentum = prices[-1] + (prices[-1] - prices[-2])
+
+        pred = ((trend + momentum) / 2.0)
+        pred_float = float(pred.item())
+
+        pct = ((pred_float - prices[-1]) / prices[-1] * 100)
+        pct_float = float(pct.item())
+
+        return round(pred_float, 2), round(pct_float, 2)
+    except Exception:
+        return None, None
+
+# ============================
+# OBTENER DATOS DE STOCK (Sin Tendencia)
+# ============================
+def get_stock_data(ticker):
+    today = datetime.now().date()
+    month_ago = today - timedelta(days=30)
+    ytd_start = datetime(today.year, 1, 1).date()
+
+    data_daily = safe_download(ticker, period="5d")
+    data_month = safe_download(ticker, start=month_ago, end=today)
+    data_ytd = safe_download(ticker, start=ytd_start, end=today)
+
+    if any(df is None or df.empty for df in [data_daily, data_month, data_ytd]):
+        return None
+
+    try:
+        last_price = float(data_daily["Close"].iloc[-1])
+        prev_price = float(data_daily["Close"].iloc[-2])
+        daily_change = ((last_price - prev_price) / prev_price) * 100
+        daily_volume = float(data_daily["Volume"].iloc[-1])
+    except Exception:
+        return None
+
+    try:
+        last_month = float(data_month["Close"].iloc[-1])
+        first_month = float(data_month["Close"].iloc[0])
+        monthly_change = ((last_month - first_month) / first_month) * 100
+    except Exception:
+        monthly_change = None
+
+    try:
+        last_ytd = float(data_ytd["Close"].iloc[-1])
+        first_ytd = float(data_ytd["Close"].iloc[0])
+        ytd_change = ((last_ytd - first_ytd) / first_ytd) * 100
+    except Exception:
+        ytd_change = None
+
+    pred_price, pred_pct = predict_price(data_month)
+
+    return {
+        "Ticker": ticker,
+        "Price": last_price,
+        "Volume": daily_volume,
+        "Daily": None if daily_change is None else round(daily_change, 2),
+        "Monthly": None if monthly_change is None else round(monthly_change, 2),
+        "YTD": None if ytd_change is None else round(ytd_change, 2),
+        "PredPrice": pred_price,
+        "PredPct": pred_pct
+    }
+
+# ============================
+# FORMATOS HTML
+# ============================
+def colorize_pct(v):
+    try:
+        v = float(v)
+    except:
+        return "-"
+    if v > 0:
+        return f"<span style='color:#16a34a;font-weight:bold;'>▲ {v:.2f}%</span>"
+    if v < 0:
+        return f"<span style='color:#dc2626;font-weight:bold;'>▼ {abs(v):.2f}%</span>"
+    return f"{v:.2f}%"
+
+def format_price(v):
+    try:
+        return f"${float(v):,.2f}"
+    except:
+        return "-"
+
+def format_volume(v):
+    try:
+        v = float(v)
+        if v > 1_000_000_000:
+            return f"{v / 1_000_000_000:.1f}B"
+        if v > 1_000_000:
+            return f"{v / 1_000_000:.1f}M"
+        if v > 1_000:
+            return f"{v / 1_000:.1f}K"
+        return f"{v:,.0f}"
+    except:
+        return "-"
+
+# --- Tendencia removida ---
+# def format_trend(v):
+#    ...
+
+def format_prediction(price, pct):
+    if price is None or pct is None:
+        return "-"
+    arrow = "▲" if pct >= 0 else "▼"
+    color = "#16a34a" if pct >= 0 else "#dc2626"
+    return f"<span style='font-weight:bold;'>{format_price(price)}</span>&nbsp;<span style='color:{color};'>{arrow} {abs(pct):.2f}%</span><br><span style='font-size:10px;color:gray;'>pred. 24h</span>"
+
+# ============================
+# GRÁFICO INLINE (CID)
+# ============================
+def crear_grafico_bytes(tickers):
+    plt.figure(figsize=(10, 3.5))
+    for t in tickers:
+        try:
+            s = yf.download(t, period="3mo", progress=False, auto_adjust=False)["Close"]
+            s_norm = s / s.iloc[0] * 100
+            color = TICKER_COLORS.get(t, None)
+            plt.plot(s_norm.index, s_norm.values, label=t, linewidth=1.2, color=color)
+        except:
+            continue
+
+    plt.title("Comparación últimos 3 meses (normalizado %)")
+    plt.legend(ncol=4, fontsize=8)
+    plt.grid(axis='y', linestyle=':', alpha=0.6)
+    plt.tight_layout()
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=120)
+    buf.seek(0)
+    img_bytes = buf.read()
+    plt.close()
+    return img_bytes
+
+# ============================
+# CONSTRUIR REPORTE HTML
+# ============================
+def generar_resumen_dinamico_pro(index_rows_main, index_rows_global):
+    valores = {}
+    for x in index_rows_main + index_rows_global:
+        valores[x["Index"]] = x["Change"]
+
+    sp = valores.get("S&P 500")
+    dow = valores.get("Dow Jones")
+    vix = valores.get("VIX (Volatilidad)")
+    oro = valores.get("Oro (Futuros)")
+    petroleo = valores.get("Petróleo WTI (Futuros)")
+    tasa = valores.get("Tasa 10 Años (x100)")
+
+    resumen = []
+    tags = []
+
+    # --- 1. Sentimiento general del mercado ---
+    if sp is not None:
+        if sp <= -1.2:
+            resumen.append("Fuerte aversión al riesgo en Wall Street, con ventas agresivas y presión generalizada sobre los activos de riesgo.")
+            tags.append("Risk-OFF")
+        elif sp <= -0.6:
+            resumen.append("Sesión negativa con clima vendedor, aunque sin pánico generalizado.")
+            tags.append("Bearish")
+        elif sp >= 1.2:
+            resumen.append("Rally sólido en los principales índices, reflejando un claro apetito por riesgo.")
+            tags.append("Risk-ON")
+        elif sp >= 0.5:
+            resumen.append("Mercado en tono positivo, con compras selectivas y buen sentimiento general.")
+            tags.append("Bullish")
+        else:
+            resumen.append("Día de movimientos acotados y sin una dirección clara en los principales índices.")
+            tags.append("Neutral")
+
+    # --- 2. Volatilidad (VIX) ---
+    if vix is not None:
+        if vix > 10:
+            resumen.append(f"El VIX se dispara ({vix:.1f}%), señalizando tensiones y mayor incertidumbre en el mercado.")
+            tags.append("Alta Volatilidad")
+        elif vix > 4:
+            resumen.append(f"La volatilidad aumenta ({vix:.1f}%), llevando a los inversores a operar con más cautela.")
+        elif vix < -8:
+            resumen.append(f"El VIX colapsa ({vix:.1f}%), reflejando una fuerte reducción en la percepción de riesgo.")
+            tags.append("Complacencia")
+        elif vix < -3:
+            resumen.append(f"El VIX cae ({vix:.1f}%), indicando calma relativa en el mercado.")
+
+    # --- 3. Oro (Activo refugio) ---
+    if oro is not None:
+        if oro < -1.5:
+            resumen.append("El oro cae con fuerza, debilitando su rol tradicional como activo refugio en jornadas de incertidumbre.")
+        elif oro > 1.2:
+            resumen.append("El oro sube, mostrando un mayor interés por activos defensivos.")
+
+    # --- 4. Petróleo (Inflación y actividad económica) ---
+    if petroleo is not None:
+        if petroleo > 1.8:
+            resumen.append("El petróleo sube con fuerza, lo que podría presionar expectativas inflacionarias.")
+        elif petroleo < -2:
+            resumen.append("El petróleo retrocede con fuerza, reduciendo tensiones inflacionarias y sugiriendo menor demanda global.")
+
+    # --- 5. Tasas (Lectura macro) ---
+    if tasa is not None:
+        if tasa > 1.5:
+            resumen.append("Las tasas de 10 años suben, encareciendo el costo del dinero y afectando a las empresas de crecimiento.")
+            tags.append("Tasas al alza")
+        elif tasa < -1.5:
+            resumen.append("Las tasas de 10 años caen, dando alivio al mercado y favoreciendo a los sectores más sensibles al crédito.")
+
+    # --- 6. Conclusión operativa ---
+    if sp is not None:
+        if sp <= -1:
+            resumen.append("En conjunto, el mercado mantiene una postura defensiva. Recomendable cautela y revisión de posiciones.")
+        elif sp >= 1:
+            resumen.append("El contexto favorece estrategias más agresivas y exposición a activos de riesgo.")
+        else:
+            resumen.append("La jornada no define una tendencia clara, por lo que conviene esperar confirmaciones.")
+
+    # --- 7. Construcción final ---
+    texto = " ".join(resumen)
+
+    # Tags automáticos
+    if len(tags) > 0:
+        texto += f"\n\n<b>Etiquetas del día:</b> {', '.join(tags)}"
+
+    return texto
+
+
+
+def build_report_html(tickers, indexes_main, indexes_global, sector_etfs):
+    rows = []
+    for t in tickers:
+        info = get_stock_data(t)
+        # --- Removido "Trend": None ---
+        rows.append(info if info else {
+            "Ticker": t, "Price": None, "Volume": None, "Daily": None, "Monthly": None,
+            "YTD": None, "PredPrice": None, "PredPct": None
+        })
+    df = pd.DataFrame(rows)
+
+    def get_index_rows(index_dict):
+        idx_rows = []
+        for sym, name in index_dict.items():
+            df_idx = safe_download(sym, period="5d")
+            if df_idx is None:
+                idx_rows.append({"Index": name, "Value": None, "Change": None})
+                continue
+            try:
+                last = float(df_idx["Close"].iloc[-1])
+                prev = float(df_idx["Close"].iloc[-2])
+                daily = ((last - prev) / prev) * 100
+            except:
+                last, daily = None, None
+            idx_rows.append({"Index": name, "Value": last, "Change": daily})
+        return idx_rows
+
+    idx_rows_main = get_index_rows(indexes_main)
+    idx_rows_global = get_index_rows(indexes_global)
+    resumen_dinamico = generar_resumen_dinamico_pro(idx_rows_main, idx_rows_global)
+    idx_rows_sector = get_index_rows(sector_etfs)
+
+    border_style = "border:1px solid #ddd;"
+    td_style = f"style='padding:8px;text-align:center;{border_style}'"
+    th_style = f"style='padding:8px;background:#f3f4f6;text-align:center;{border_style}'"
+    left_td = f"style='padding:8px;text-align:left;{border_style}'"
+    left_th = f"style='padding:8px;background:#f3f4f6;text-align:left;{border_style}'"
+    right_td = f"style='padding:8px;text-align:right;{border_style}'"
+    right_th = f"style='padding:8px;background:#f3f4f6;text-align:right;{border_style}'"
+    
+    def create_html_table(rows_data, is_sector=False):
+        html_rows = ""
+        if is_sector:
+            rows_data.sort(key=lambda x: x['Change'] if x['Change'] is not None else -999, reverse=True)
+            
+        for r in rows_data:
+            if r['Value'] is None:
+                price_format = "-"
+            elif r['Index'] in ["S&P 500", "Dow Jones", "Oro (Futuros)", "Petróleo WTI (Futuros)"] or is_sector:
+                price_format = format_price(r['Value'])
+            else:
+                price_format = f"{float(r['Value']):,.2f}"
+            
+            html_rows += f"""
+            <tr>
+                <td {left_td}>{r['Index']}</td>
+                <td {right_td}>{price_format}</td>
+                <td {td_style}>{colorize_pct(r['Change'])}</td>
+            </tr>
+            """
+        return html_rows
+
+    html_idx_main = create_html_table(idx_rows_main)
+    html_idx_global = create_html_table(idx_rows_global, is_sector=False)
+    html_idx_sector = create_html_table(idx_rows_sector, is_sector=True)
+
+    html_stock_rows = ""
+    for _, r in df.iterrows():
+        color = TICKER_COLORS.get(r["Ticker"], "#333")
+        ticker_label = f"""<span style='color:{color};font-size:14px;font-weight:bold;'>●</span>&nbsp;<span style="font-weight:bold;">{r['Ticker']}</span>"""
+
+        html_stock_rows += f"""
+        <tr>
+            <td {left_td}>{ticker_label}</td>
+            <td {right_td}>{format_price(r['Price'])}</td>
+            <td {right_td}>{format_volume(r['Volume'])}</td>
+            <td {td_style}>{colorize_pct(r['Daily'])}</td>
+            <td {td_style}>{colorize_pct(r['Monthly'])}</td>
+            <td {td_style}>{colorize_pct(r['YTD'])}</td>
+            <td {td_style}>{format_prediction(r['PredPrice'], r['PredPct'])}</td>
+        </tr>
+        """
+
+    # --- CAMBIO: Resumen color Celeste y nuevo título ---
+    html_resumen = f"""
+    <div style="background:#e0f2fe;border:1px solid #bae6fd;padding:12px 16px;border-radius:8px;margin-bottom:20px;">
+    <h3 style="margin:0 0 8px 0;color:#0369a1;">Resumen de nuestro BotStockMarket</h3>
+    <p style="margin:0;font-size:14px;color:#333;">
+        {resumen_dinamico}
+    </p>
+    </div>
+           """
+    # ----------------------------------------------------
+
+    html = f"""
+    <html>
+    <body style="font-family:Arial, sans-serif;color:#111;margin:16px;">
+
+    <h2 style="color:#1d4ed8;">📊 Reporte Diario del Mercado</h2>
+    <p style="margin-top:-10px;">Fecha: <b>{datetime.now().strftime('%Y-%m-%d %H:%M')}</b></p>
+
+    {html_resumen}
+
+    <h3 style="margin-bottom:6px;">📈 Índices Principales</h3>
+    <table style="width:70%; border-collapse:collapse; margin-bottom:18px;">
+        <thead>
+            <tr>
+                <th {left_th}>Índice</th>
+                <th {right_th}>Valor</th>
+                <th {th_style}>Cambio Diario</th>
+            </tr>
+        </thead>
+        <tbody>
+            {html_idx_main}
+        </tbody>
+    </table>
+
+    <h3 style="margin-bottom:6px;">🌍 Contexto Global</h3>
+    <table style="width:70%; border-collapse:collapse; margin-bottom:18px;">
+        <thead>
+            <tr>
+                <th {left_th}>Instrumento</th>
+                <th {right_th}>Valor</th>
+                <th {th_style}>Cambio Diario</th>
+            </tr>
+        </thead>
+        <tbody>
+            {html_idx_global}
+        </tbody>
+    </table>
+
+    <h3 style="margin-bottom:6px;">🏛️ Rendimiento Sectorial (ETFs)</h3>
+    <table style="width:70%; border-collapse:collapse; margin-bottom:18px;">
+        <thead>
+            <tr>
+                <th {left_th}>Sector</th>
+                <th {right_th}>Valor</th>
+                <th {th_style}>Cambio Diario</th>
+            </tr>
+        </thead>
+        <tbody>
+            {html_idx_sector}
+        </tbody>
+    </table>
+
+    <h3 style="margin-top:10px;">📉 Gráfico Últimos 3 meses</h3>
+    <img src="cid:grafico1" style="width:90%;max-width:700px;border:1px solid #e6e6e6;padding:6px;margin-bottom:12px;"/>
+
+    <h3 style="margin-top:14px;">💼 Acciones Seguimiento</h3>
+    <table style="width:95%;max-width:900px;border-collapse:collapse;">
+        <thead>
+            <tr>
+                <th {left_th}>Ticker</th>
+                <th {right_th}>Precio</th>
+                <th {right_th}>Volumen</th>
+                <th {th_style}>Día</th>
+                <th {th_style}>Mensual</th>
+                <th {th_style}>YTD</th>
+                <th {th_style}>Pred. (24h)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {html_stock_rows}
+        </tbody>
+    </table>
+
+    <p style="font-size:11px;color:gray;margin-top:18px;">
+        Nota: La predicción es un modelo simple (tendencia + momentum). No constituye asesoramiento financiero.
+    </p>
+    
+    <p style="font-size:12px;color:#999;text-align:center;margin-top:20px;border-top:1px solid #eee;padding-top:10px;">
+        Reporte automático generado con <strong>Python</strong> 🐍
+    </p>
+
+    </body>
+    </html>
+    """
+    return html
+
+# ============================
+# ENVIAR EMAIL
+# ============================
+def send_email(subject, html_body, chart_bytes):
+    msg = MIMEMultipart("related")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_REMITENTE
+    msg["To"] = EMAIL_DESTINATARIO
+    msg_alt = MIMEMultipart("alternative")
+    msg.attach(msg_alt)
+    msg_alt.attach(MIMEText(html_body, "html"))
+    img = MIMEImage(chart_bytes)
+    img.add_header("Content-ID", "<grafico1>")
+    msg.attach(img)
+
+    try:
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        server.login(EMAIL_REMITENTE, EMAIL_CONTRASENA)
+        server.sendmail(EMAIL_REMITENTE, EMAIL_DESTINATARIO, msg.as_string())
+        server.quit()
+        print("📨 Email enviado correctamente!")
+    except Exception as e:
+        print("❌ Error enviando email:", e)
+
+# ============================
+# MAIN
+# ============================
+if __name__ == "__main__":
+    print("🛠️  Generando reporte profesional...")
+    html = build_report_html(TICKERS, INDEXES_PRINCIPALES, INDEXES_GLOBALES, SECTOR_ETFS)
+    chart_bytes = crear_grafico_bytes(TICKERS)
+    print("📤 Enviando email...")
+    send_email("📈 Reporte Diario Profesional + Gráfico", html, chart_bytes)
