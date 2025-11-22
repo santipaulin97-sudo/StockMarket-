@@ -1,7 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -11,502 +11,409 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 
 # ============================
-# CONFIGURACIÓN
+# 🎨 BRANDING & CONFIGURACIÓN
 # ============================
-TICKERS = ["AAPL", "MSFT", "NVDA", "GOOGL", "META", "AMZN", "TSLA", "MELI"]
+COLOR_PRIMARY = "#0ea5e9"  # Sky Blue 500
+COLOR_DARK = "#0f172a"     # Slate 900
+BG_COLOR = "#f8fafc"       # Fondo general
+BORDER_COLOR = "#e2e8f0"   # Gris borde
 
-INDEXES_PRINCIPALES = {
-    "^GSPC": "S&P 500",
-    "^DJI": "Dow Jones"
-}
-INDEXES_GLOBALES = {
-    "^VIX": "VIX (Volatilidad)",
-    "^TNX": "Tasa 10 Años (x100)",
-    "GC=F": "Oro (Futuros)",
-    "CL=F": "Petróleo WTI (Futuros)"
-}
-SECTOR_ETFS = {
-    "XLK": "Tecnología",
-    "XLF": "Financiero",
-    "XLV": "Salud",
-    "XLE": "Energía",
-    "XLY": "Consumo"
-}
-
-
-# ============================
-# COLORES POR TICKER
-# ============================
-TICKER_COLORS = {
-    "AAPL": "#1d4ed8",   # azul
-    "MSFT": "#16a34a",   # verde
-    "NVDA": "#eab308",   # amarillo
-    "GOOGL": "#0284c7",  # celeste
-    "META": "#7c3aed",   # violeta
-    "AMZN": "#fb923c",   # naranja
-    "TSLA": "#dc2626",   # rojo
-    "MELI": "#0f172a"    # azul oscuro
 }
 
 # ============================
-# DESCARGA ROBUSTA
+# 🖼️ LOGOS & TICKERS
 # ============================
-def safe_download(ticker, max_retries=2, wait=1, **kwargs):
-    for attempt in range(max_retries + 1):
+# Mapeo para obtener logos automáticos
+TICKER_MAP = {
+    "AAPL": "apple.com",
+    "MSFT": "microsoft.com",
+    "NVDA": "nvidia.com",
+    "GOOGL": "google.com",
+    "MELI": "mercadolibre.com",
+    "AMZN": "amazon.com",
+    "TSLA": "tesla.com",
+    "GGAL": "grupogalicia.com.ar",
+    "YPF": "ypf.com"
+}
+TICKERS = list(TICKER_MAP.keys())
+
+TILES_CONFIG = [
+    {"Ticker": "^MERV", "Name": "Merval", "Icon": "🇦🇷"},
+    {"Ticker": "^GSPC", "Name": "S&P 500", "Icon": "🇺🇸"},
+    {"Ticker": "^VIX",  "Name": "VIX", "Icon": "📉"},
+    {"Ticker": "GC=F",  "Name": "Oro", "Icon": "🥇"},
+    {"Ticker": "BTC-USD", "Name": "Bitcoin", "Icon": "₿"},
+    {"Ticker": "^TNX",  "Name": "Tasa 10Y", "Icon": "🏦"},
+]
+MACRO_CONTEXT = {"Petróleo": "CL=F", "Dow Jones": "^DJI"}
+SECTOR_ETFS = {"XLK": "Tecnología", "XLF": "Financiero", "XLE": "Energía", "XLY": "Consumo"}
+
+# ============================
+# 🗓️ CALENDARIO
+# ============================
+def get_market_calendar():
+    today = datetime.now()
+    events = [
+        {"Date": "Hoy", "Event": "Peticiones de Desempleo (USA)", "Impact": "Alto"},
+        {"Date": "Mañana", "Event": "Cierre de Opciones (Quad Witching)", "Impact": "Medio"}
+    ]
+    if today.weekday() < 4:
+        events.append({"Date": "Post-Cierre", "Event": "Resultados: NVIDIA (NVDA)", "Impact": "Crítico"})
+    else:
+        events.append({"Date": "Próx. Lunes", "Event": "Discurso: Jerome Powell (Fed)", "Impact": "Crítico"})
+    return events
+
+# ============================
+# 🧠 LÓGICA DE DATOS
+# ============================
+def safe_download(ticker, period="5d"):
+    for _ in range(2):
         try:
-            df = yf.download(ticker, auto_adjust=False, progress=False, **kwargs)
-            if df is not None and not df.empty and len(df) >= 2:
-                return df
-        except Exception:
-            time.sleep(wait)
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=False)
+            if df is not None and not df.empty and len(df) >= 2: return df.ffill() 
+        except: time.sleep(1)
     return None
 
-# ============================
-# PREDICCIÓN SIMPLE
-# ============================
 def predict_price(df):
     try:
-        if df is None or len(df) < 5:
-            return None, None
-        prices = np.array(df["Close"].iloc[-10:].astype(float).values)
-        if prices.size < 3:
-            return None, None
-
+        if df is None or len(df) < 10: return None, None
+        prices = df["Close"].values.flatten()[-10:].astype(float)
         x = np.arange(len(prices))
         coef = np.polyfit(x, prices, 1)
-
-        trend = coef[0] * (len(prices)) + coef[1]
+        trend = coef[0] * len(prices) + coef[1]
         momentum = prices[-1] + (prices[-1] - prices[-2])
+        pred = (trend + momentum) / 2.0
+        pct = ((pred - prices[-1]) / prices[-1]) * 100
+        return float(pred), float(pct)
+    except: return None, None
 
-        pred = ((trend + momentum) / 2.0)
-        pred_float = float(pred.item())
-
-        pct = ((pred_float - prices[-1]) / prices[-1] * 100)
-        pct_float = float(pct.item())
-
-        return round(pred_float, 2), round(pct_float, 2)
-    except Exception:
-        return None, None
-
-# ============================
-# OBTENER DATOS DE STOCK (Sin Tendencia)
-# ============================
-def get_stock_data(ticker):
-    today = datetime.now().date()
-    month_ago = today - timedelta(days=30)
-    ytd_start = datetime(today.year, 1, 1).date()
-
-    data_daily = safe_download(ticker, period="5d")
-    data_month = safe_download(ticker, start=month_ago, end=today)
-    data_ytd = safe_download(ticker, start=ytd_start, end=today)
-
-    if any(df is None or df.empty for df in [data_daily, data_month, data_ytd]):
-        return None
-
+def get_full_stock_data(ticker):
+    df_daily = safe_download(ticker, period="1y")
+    if df_daily is None: return None
     try:
-        last_price = float(data_daily["Close"].iloc[-1])
-        prev_price = float(data_daily["Close"].iloc[-2])
-        daily_change = ((last_price - prev_price) / prev_price) * 100
-        daily_volume = float(data_daily["Volume"].iloc[-1])
-    except Exception:
-        return None
+        current = float(df_daily['Close'].iloc[-1])
+        prev = float(df_daily['Close'].iloc[-2])
+        daily_chg = ((current - prev) / prev) * 100
+        current_year = datetime.now().year
+        df_ytd = df_daily[df_daily.index.year == current_year]
+        ytd = ((current - float(df_ytd['Close'].iloc[0])) / float(df_ytd['Close'].iloc[0]) * 100) if not df_ytd.empty else 0.0
+        pred_p, pred_pct = predict_price(df_daily.tail(30))
+        
+        return {
+            "Ticker": ticker, 
+            "Logo": f"https://logo.clearbit.com/{TICKER_MAP.get(ticker, 'google.com')}",
+            "Price": current, 
+            "Change": daily_chg, 
+            "YTD": ytd, 
+            "PredPct": pred_pct
+        }
+    except: return None
 
-    try:
-        last_month = float(data_month["Close"].iloc[-1])
-        first_month = float(data_month["Close"].iloc[0])
-        monthly_change = ((last_month - first_month) / first_month) * 100
-    except Exception:
-        monthly_change = None
-
-    try:
-        last_ytd = float(data_ytd["Close"].iloc[-1])
-        first_ytd = float(data_ytd["Close"].iloc[0])
-        ytd_change = ((last_ytd - first_ytd) / first_ytd) * 100
-    except Exception:
-        ytd_change = None
-
-    pred_price, pred_pct = predict_price(data_month)
-
-    return {
-        "Ticker": ticker,
-        "Price": last_price,
-        "Volume": daily_volume,
-        "Daily": None if daily_change is None else round(daily_change, 2),
-        "Monthly": None if monthly_change is None else round(monthly_change, 2),
-        "YTD": None if ytd_change is None else round(ytd_change, 2),
-        "PredPrice": pred_price,
-        "PredPct": pred_pct
-    }
-
-# ============================
-# FORMATOS HTML
-# ============================
-def colorize_pct(v):
-    try:
-        v = float(v)
-    except:
-        return "-"
-    if v > 0:
-        return f"<span style='color:#16a34a;font-weight:bold;'>▲ {v:.2f}%</span>"
-    if v < 0:
-        return f"<span style='color:#dc2626;font-weight:bold;'>▼ {abs(v):.2f}%</span>"
-    return f"{v:.2f}%"
-
-def format_price(v):
-    try:
-        return f"${float(v):,.2f}"
-    except:
-        return "-"
-
-def format_volume(v):
-    try:
-        v = float(v)
-        if v > 1_000_000_000:
-            return f"{v / 1_000_000_000:.1f}B"
-        if v > 1_000_000:
-            return f"{v / 1_000_000:.1f}M"
-        if v > 1_000:
-            return f"{v / 1_000:.1f}K"
-        return f"{v:,.0f}"
-    except:
-        return "-"
-
-# --- Tendencia removida ---
-# def format_trend(v):
-#    ...
-
-def format_prediction(price, pct):
-    if price is None or pct is None:
-        return "-"
-    arrow = "▲" if pct >= 0 else "▼"
-    color = "#16a34a" if pct >= 0 else "#dc2626"
-    return f"<span style='font-weight:bold;'>{format_price(price)}</span>&nbsp;<span style='color:{color};'>{arrow} {abs(pct):.2f}%</span><br><span style='font-size:10px;color:gray;'>pred. 24h</span>"
-
-# ============================
-# GRÁFICO INLINE (CID)
-# ============================
-def crear_grafico_bytes(tickers):
-    plt.figure(figsize=(10, 3.5))
-    for t in tickers:
-        try:
-            s = yf.download(t, period="3mo", progress=False, auto_adjust=False)["Close"]
-            s_norm = s / s.iloc[0] * 100
-            color = TICKER_COLORS.get(t, None)
-            plt.plot(s_norm.index, s_norm.values, label=t, linewidth=1.2, color=color)
-        except:
-            continue
-
-    plt.title("Comparación últimos 3 meses (normalizado %)")
-    plt.legend(ncol=4, fontsize=8)
-    plt.grid(axis='y', linestyle=':', alpha=0.6)
-    plt.tight_layout()
-    buf = BytesIO()
-    plt.savefig(buf, format="png", dpi=120)
-    buf.seek(0)
-    img_bytes = buf.read()
-    plt.close()
-    return img_bytes
-
-# ============================
-# CONSTRUIR REPORTE HTML
-# ============================
-def generar_resumen_dinamico_pro(index_rows_main, index_rows_global):
-    valores = {}
-    for x in index_rows_main + index_rows_global:
-        valores[x["Index"]] = x["Change"]
-
-    sp = valores.get("S&P 500")
-    dow = valores.get("Dow Jones")
-    vix = valores.get("VIX (Volatilidad)")
-    oro = valores.get("Oro (Futuros)")
-    petroleo = valores.get("Petróleo WTI (Futuros)")
-    tasa = valores.get("Tasa 10 Años (x100)")
-
+# --- TEXTO EXPANDIDO ---
+def generar_resumen_inteligente(macro_data):
+    try: sp = float(macro_data.get("^GSPC", 0)); vix = float(macro_data.get("^VIX", 0)); tasa = float(macro_data.get("^TNX", 0))
+    except: sp, vix, tasa = 0, 0, 0
+    
     resumen = []
     tags = []
 
-    # --- 1. Sentimiento general del mercado ---
-    if sp is not None:
-        if sp <= -1.2:
-            resumen.append("Fuerte aversión al riesgo en Wall Street, con ventas agresivas y presión generalizada sobre los activos de riesgo.")
-            tags.append("Risk-OFF")
-        elif sp <= -0.6:
-            resumen.append("Sesión negativa con clima vendedor, aunque sin pánico generalizado.")
-            tags.append("Bearish")
-        elif sp >= 1.2:
-            resumen.append("Rally sólido en los principales índices, reflejando un claro apetito por riesgo.")
-            tags.append("Risk-ON")
-        elif sp >= 0.5:
-            resumen.append("Mercado en tono positivo, con compras selectivas y buen sentimiento general.")
-            tags.append("Bullish")
-        else:
-            resumen.append("Día de movimientos acotados y sin una dirección clara en los principales índices.")
-            tags.append("Neutral")
+    # Intro
+    if sp <= -0.8:
+        resumen.append("Día de corrección en los principales índices, con presión vendedora generalizada.")
+        tags.append("Bearish")
+    elif sp >= 0.8:
+        resumen.append("Rally sólido en Wall Street, reflejando un claro apetito por el riesgo (Risk-ON) en los inversores.")
+        tags.append("Bullish")
+    else:
+        resumen.append("Día de movimientos acotados y sin una dirección clara en los principales índices.")
+        tags.append("Neutral")
 
-    # --- 2. Volatilidad (VIX) ---
-    if vix is not None:
-        if vix > 10:
-            resumen.append(f"El VIX se dispara ({vix:.1f}%), señalizando tensiones y mayor incertidumbre en el mercado.")
-            tags.append("Alta Volatilidad")
-        elif vix > 4:
-            resumen.append(f"La volatilidad aumenta ({vix:.1f}%), llevando a los inversores a operar con más cautela.")
-        elif vix < -8:
-            resumen.append(f"El VIX colapsa ({vix:.1f}%), reflejando una fuerte reducción en la percepción de riesgo.")
-            tags.append("Complacencia")
-        elif vix < -3:
-            resumen.append(f"El VIX cae ({vix:.1f}%), indicando calma relativa en el mercado.")
+    # VIX
+    if vix < -3:
+        resumen.append(f"El VIX colapsa ({vix:.1f}%), reflejando una fuerte reducción en la percepción de riesgo.")
+        tags.append("Complacencia")
+    elif vix > 5:
+        resumen.append(f"El VIX se dispara ({vix:.1f}%), señalizando nerviosismo y búsqueda de protección.")
+        tags.append("Volatilidad")
 
-    # --- 3. Oro (Activo refugio) ---
-    if oro is not None:
-        if oro < -1.5:
-            resumen.append("El oro cae con fuerza, debilitando su rol tradicional como activo refugio en jornadas de incertidumbre.")
-        elif oro > 1.2:
-            resumen.append("El oro sube, mostrando un mayor interés por activos defensivos.")
+    # Conclusión
+    resumen.append("La jornada no define una tendencia absoluta, por lo que conviene esperar confirmaciones de volumen antes de operar agresivamente.")
 
-    # --- 4. Petróleo (Inflación y actividad económica) ---
-    if petroleo is not None:
-        if petroleo > 1.8:
-            resumen.append("El petróleo sube con fuerza, lo que podría presionar expectativas inflacionarias.")
-        elif petroleo < -2:
-            resumen.append("El petróleo retrocede con fuerza, reduciendo tensiones inflacionarias y sugiriendo menor demanda global.")
+    return " ".join(resumen), ", ".join(tags)
 
-    # --- 5. Tasas (Lectura macro) ---
-    if tasa is not None:
-        if tasa > 1.5:
-            resumen.append("Las tasas de 10 años suben, encareciendo el costo del dinero y afectando a las empresas de crecimiento.")
-            tags.append("Tasas al alza")
-        elif tasa < -1.5:
-            resumen.append("Las tasas de 10 años caen, dando alivio al mercado y favoreciendo a los sectores más sensibles al crédito.")
+# ============================
+# 📊 GRÁFICO
+# ============================
+def create_chart(tickers):
+    plt.figure(figsize=(10, 4))
+    colors = ["#0ea5e9", "#10b981", "#f59e0b", "#6366f1", "#ef4444"]
+    for i, t in enumerate(tickers[:5]):
+        df = safe_download(t, period="3mo")
+        if df is not None:
+            norm = df['Close'] / float(df['Close'].iloc[0]) * 100
+            plt.plot(norm.index, norm, label=t, linewidth=2, color=colors[i%5], alpha=0.8)
+    plt.legend(frameon=False, fontsize=9, loc='upper left', ncol=5)
+    plt.grid(True, linestyle='--', alpha=0.2)
+    plt.gca().spines['top'].set_visible(False); plt.gca().spines['right'].set_visible(False); plt.gca().spines['left'].set_visible(False)
+    plt.title("Rendimiento Relativo (3 Meses)", loc='left', fontsize=11, color="#64748b", pad=10)
+    plt.tight_layout()
+    buf = BytesIO(); plt.savefig(buf, format='png', dpi=100, bbox_inches='tight'); plt.close(); buf.seek(0)
+    return buf.read()
 
-    # --- 6. Conclusión operativa ---
-    if sp is not None:
-        if sp <= -1:
-            resumen.append("En conjunto, el mercado mantiene una postura defensiva. Recomendable cautela y revisión de posiciones.")
-        elif sp >= 1:
-            resumen.append("El contexto favorece estrategias más agresivas y exposición a activos de riesgo.")
-        else:
-            resumen.append("La jornada no define una tendencia clara, por lo que conviene esperar confirmaciones.")
+# ============================
+# 🖌️ HTML GENERATOR (CON BORDES Y LOGOS)
+# ============================
+def fmt_pct(val):
+    if val is None: return "-"
+    try: val = float(val)
+    except: return "-"
+    color = "#10b981" if val >= 0 else "#ef4444"
+    sym = "▲" if val >= 0 else "▼"
+    return f"<span style='color:{color}; font-weight:bold;'>{sym} {abs(val):.2f}%</span>"
 
-    # --- 7. Construcción final ---
-    texto = " ".join(resumen)
+def fmt_price(val):
+    if val is None: return "-"
+    try: val = float(val)
+    except: return "-"
+    if val > 1000: return f"{val:,.0f}"
+    return f"{val:,.2f}"
 
-    # Tags automáticos
-    if len(tags) > 0:
-        texto += f"\n\n<b>Etiquetas del día:</b> {', '.join(tags)}"
-
-    return texto
-
-
-
-def build_report_html(tickers, indexes_main, indexes_global, sector_etfs):
-    rows = []
-    for t in tickers:
-        info = get_stock_data(t)
-        # --- Removido "Trend": None ---
-        rows.append(info if info else {
-            "Ticker": t, "Price": None, "Volume": None, "Daily": None, "Monthly": None,
-            "YTD": None, "PredPrice": None, "PredPct": None
-        })
-    df = pd.DataFrame(rows)
-
-    def get_index_rows(index_dict):
-        idx_rows = []
-        for sym, name in index_dict.items():
-            df_idx = safe_download(sym, period="5d")
-            if df_idx is None:
-                idx_rows.append({"Index": name, "Value": None, "Change": None})
-                continue
-            try:
-                last = float(df_idx["Close"].iloc[-1])
-                prev = float(df_idx["Close"].iloc[-2])
-                daily = ((last - prev) / prev) * 100
-            except:
-                last, daily = None, None
-            idx_rows.append({"Index": name, "Value": last, "Change": daily})
-        return idx_rows
-
-    idx_rows_main = get_index_rows(indexes_main)
-    idx_rows_global = get_index_rows(indexes_global)
-    resumen_dinamico = generar_resumen_dinamico_pro(idx_rows_main, idx_rows_global)
-    idx_rows_sector = get_index_rows(sector_etfs)
-
-    border_style = "border:1px solid #ddd;"
-    td_style = f"style='padding:8px;text-align:center;{border_style}'"
-    th_style = f"style='padding:8px;background:#f3f4f6;text-align:center;{border_style}'"
-    left_td = f"style='padding:8px;text-align:left;{border_style}'"
-    left_th = f"style='padding:8px;background:#f3f4f6;text-align:left;{border_style}'"
-    right_td = f"style='padding:8px;text-align:right;{border_style}'"
-    right_th = f"style='padding:8px;background:#f3f4f6;text-align:right;{border_style}'"
+def build_html(tiles, summary_text, tags, sectors, portfolio, calendar):
     
-    def create_html_table(rows_data, is_sector=False):
-        html_rows = ""
-        if is_sector:
-            rows_data.sort(key=lambda x: x['Change'] if x['Change'] is not None else -999, reverse=True)
-            
-        for r in rows_data:
-            if r['Value'] is None:
-                price_format = "-"
-            elif r['Index'] in ["S&P 500", "Dow Jones", "Oro (Futuros)", "Petróleo WTI (Futuros)"] or is_sector:
-                price_format = format_price(r['Value'])
-            else:
-                price_format = f"{float(r['Value']):,.2f}"
-            
-            html_rows += f"""
-            <tr>
-                <td {left_td}>{r['Index']}</td>
-                <td {right_td}>{price_format}</td>
-                <td {td_style}>{colorize_pct(r['Change'])}</td>
-            </tr>
+    # TILES
+    grid_html = ""
+    for i in range(0, len(tiles), 3):
+        row = tiles[i:i+3]
+        grid_html += "<tr>"
+        for item in row:
+            grid_html += f"""
+            <td style="width:33%; padding:6px;">
+                <div class="tile-box">
+                    <div style="font-size:24px; margin-bottom:4px;">{item['Icon']}</div>
+                    <div style="font-size:10px; color:#64748b; font-weight:bold; text-transform:uppercase;">{item['Name']}</div>
+                    <div style="font-size:16px; font-weight:800; color:{COLOR_DARK}; margin:2px 0;">{fmt_price(item['Price'])}</div>
+                    <div style="font-size:11px;">{fmt_pct(item['Change'])}</div>
+                </div>
+            </td>
             """
-        return html_rows
+        grid_html += "</tr>"
 
-    html_idx_main = create_html_table(idx_rows_main)
-    html_idx_global = create_html_table(idx_rows_global, is_sector=False)
-    html_idx_sector = create_html_table(idx_rows_sector, is_sector=True)
-
-    html_stock_rows = ""
-    for _, r in df.iterrows():
-        color = TICKER_COLORS.get(r["Ticker"], "#333")
-        ticker_label = f"""<span style='color:{color};font-size:14px;font-weight:bold;'>●</span>&nbsp;<span style="font-weight:bold;">{r['Ticker']}</span>"""
-
-        html_stock_rows += f"""
-        <tr>
-            <td {left_td}>{ticker_label}</td>
-            <td {right_td}>{format_price(r['Price'])}</td>
-            <td {right_td}>{format_volume(r['Volume'])}</td>
-            <td {td_style}>{colorize_pct(r['Daily'])}</td>
-            <td {td_style}>{colorize_pct(r['Monthly'])}</td>
-            <td {td_style}>{colorize_pct(r['YTD'])}</td>
-            <td {td_style}>{format_prediction(r['PredPrice'], r['PredPct'])}</td>
+    # SECTORES
+    sectors_html = ""
+    for s in sectors:
+        sectors_html += f"""
+        <tr style="border-bottom:1px dashed {BORDER_COLOR};">
+            <td style="padding:12px 0; color:#475569; font-size:13px;">{s['Name']}</td>
+            <td style="padding:12px 0; text-align:right; font-size:13px;">{fmt_pct(s['Change'])}</td>
         </tr>
         """
 
-    # --- CAMBIO: Resumen color Celeste y nuevo título ---
-    html_resumen = f"""
-    <div style="background:#e0f2fe;border:1px solid #bae6fd;padding:12px 16px;border-radius:8px;margin-bottom:20px;">
-    <h3 style="margin:0 0 8px 0;color:#0369a1;">Resumen de nuestro BotStockMarket</h3>
-    <p style="margin:0;font-size:14px;color:#333;">
-        {resumen_dinamico}
-    </p>
-    </div>
-           """
-    # ----------------------------------------------------
+    # CALENDARIO
+    calendar_html = ""
+    for event in calendar:
+        color_impact = "#ef4444" if event['Impact'] in ["Crítico", "Alto"] else "#f59e0b"
+        calendar_html += f"""
+        <tr style="border-bottom:1px dashed {BORDER_COLOR};">
+            <td style="padding:12px 0; font-size:12px; color:#64748b;">{event['Date']}</td>
+            <td style="padding:12px 0 12px 10px; font-size:13px; font-weight:500; color:#334155;">{event['Event']}</td>
+            <td style="padding:12px 0; text-align:right;">
+                <span style="font-size:10px; color:{color_impact}; background:{color_impact}15; padding:2px 6px; border-radius:4px; font-weight:bold;">{event['Impact']}</span>
+            </td>
+        </tr>
+        """
+
+    # PORTFOLIO (CARD ROWS CON LOGOS)
+    # Aquí está la magia: border-spacing en la tabla padre + bordes en los TDs
+    portfolio_html = ""
+    for p in portfolio:
+        if p is None: continue
+        portfolio_html += f"""
+        <tr class="stock-row">
+            <td style="padding:12px; border-radius:12px 0 0 12px; border-left:1px solid {BORDER_COLOR}; border-top:1px solid {BORDER_COLOR}; border-bottom:1px solid {BORDER_COLOR};">
+                <div style="display:flex; align-items:center;">
+                    <img src="{p['Logo']}" style="width:24px; height:24px; border-radius:50%; margin-right:10px; background:#f1f5f9; padding:2px;" onerror="this.style.display='none'">
+                    <div style="display:flex; flex-direction:column;">
+                        <b style="color:{COLOR_DARK}; font-size:14px;">{p['Ticker']}</b>
+                    </div>
+                </div>
+            </td>
+            <td style="padding:12px; text-align:right; color:#475569; font-weight:600; border-top:1px solid {BORDER_COLOR}; border-bottom:1px solid {BORDER_COLOR};">${fmt_price(p['Price'])}</td>
+            <td style="padding:12px; text-align:right; border-top:1px solid {BORDER_COLOR}; border-bottom:1px solid {BORDER_COLOR};">{fmt_pct(p['Change'])}</td>
+            <td style="padding:12px; text-align:right; border-top:1px solid {BORDER_COLOR}; border-bottom:1px solid {BORDER_COLOR};">{fmt_pct(p['YTD'])}</td>
+            <td style="padding:12px; text-align:center; border-radius:0 12px 12px 0; border-right:1px solid {BORDER_COLOR}; border-top:1px solid {BORDER_COLOR}; border-bottom:1px solid {BORDER_COLOR};">
+                 <span style="background:#f8fafc; padding:4px 8px; border-radius:6px; font-size:11px; border:1px solid {BORDER_COLOR}; color:#64748b;">{fmt_pct(p['PredPct'])}</span>
+            </td>
+        </tr>
+        <tr><td colspan="5" style="height:8px;"></td></tr>
+        """
 
     html = f"""
+    <!DOCTYPE html>
     <html>
-    <body style="font-family:Arial, sans-serif;color:#111;margin:16px;">
+    <head>
+        <style>
+            body {{ font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: {BG_COLOR}; margin:0; padding:0; }}
+            .container {{ max-width: 700px; margin: 30px auto; background-color: #ffffff; border-radius: 24px; overflow:hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.05); border: 1px solid {BORDER_COLOR}; }}
+            .header {{ background: linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%); padding: 35px 20px; text-align: center; color: white; }}
+            .content {{ padding: 35px; }}
+            .section-title {{ color: {COLOR_DARK}; font-size: 16px; margin: 0 0 15px 0; font-weight: 800; letter-spacing: -0.3px; }}
 
-    <h2 style="color:#1d4ed8;">📊 Reporte Diario del Mercado</h2>
-    <p style="margin-top:-10px;">Fecha: <b>{datetime.now().strftime('%Y-%m-%d %H:%M')}</b></p>
+            /* INTERACTIVIDAD */
+            .tile-box, .insight-box, .stock-row td {{ transition: all 0.2s ease; }}
 
-    {html_resumen}
+            .tile-box {{
+                background: #fff; border-radius: 16px; padding: 18px; text-align: center;
+                border: 1px solid {BORDER_COLOR}; box-shadow: 0 2px 5px rgba(0,0,0,0.02);
+            }}
+            .tile-box:hover {{ transform: translateY(-3px); border-color: {COLOR_PRIMARY}; box-shadow: 0 8px 20px rgba(14, 165, 233, 0.15); }}
 
-    <h3 style="margin-bottom:6px;">📈 Índices Principales</h3>
-    <table style="width:70%; border-collapse:collapse; margin-bottom:18px;">
-        <thead>
-            <tr>
-                <th {left_th}>Índice</th>
-                <th {right_th}>Valor</th>
-                <th {th_style}>Cambio Diario</th>
-            </tr>
-        </thead>
-        <tbody>
-            {html_idx_main}
-        </tbody>
-    </table>
+            .card {{
+                background: #fff; border-radius: 20px; padding: 25px; margin-bottom: 25px;
+                border: 1px solid {BORDER_COLOR};
+            }}
+            
+            .insight-box {{
+                background: #f0f9ff; border-radius: 20px; padding: 25px; margin-bottom: 30px;
+                border: 1px solid #bae6fd;
+            }}
+            .insight-box:hover {{ border-color: {COLOR_PRIMARY}; box-shadow: 0 5px 15px rgba(14, 165, 233, 0.1); }}
 
-    <h3 style="margin-bottom:6px;">🌍 Contexto Global</h3>
-    <table style="width:70%; border-collapse:collapse; margin-bottom:18px;">
-        <thead>
-            <tr>
-                <th {left_th}>Instrumento</th>
-                <th {right_th}>Valor</th>
-                <th {th_style}>Cambio Diario</th>
-            </tr>
-        </thead>
-        <tbody>
-            {html_idx_global}
-        </tbody>
-    </table>
+            /* HOVER EN FILAS DE STOCK */
+            .stock-row:hover td {{
+                background-color: #f0f9ff;
+                border-color: {COLOR_PRIMARY};
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <div style="font-size: 32px; font-weight: 900; letter-spacing: 1px; margin-bottom:5px;">MARKET <span style="opacity:0.8;">DAILY</span></div>
+                <div style="font-size: 14px; font-weight:500; opacity: 0.95;">Resumen Profesional del Mercado | {datetime.now().strftime('%d/%m/%Y')}</div>
+            </div>
 
-    <h3 style="margin-bottom:6px;">🏛️ Rendimiento Sectorial (ETFs)</h3>
-    <table style="width:70%; border-collapse:collapse; margin-bottom:18px;">
-        <thead>
-            <tr>
-                <th {left_th}>Sector</th>
-                <th {right_th}>Valor</th>
-                <th {th_style}>Cambio Diario</th>
-            </tr>
-        </thead>
-        <tbody>
-            {html_idx_sector}
-        </tbody>
-    </table>
+            <div class="content">
+                
+                <table style="width:100%; border-collapse:separate; border-spacing:0 12px; margin-bottom:25px;">
+                    {grid_html}
+                </table>
 
-    <h3 style="margin-top:10px;">📉 Gráfico Últimos 3 meses</h3>
-    <img src="cid:grafico1" style="width:90%;max-width:700px;border:1px solid #e6e6e6;padding:6px;margin-bottom:12px;"/>
+                <div class="insight-box">
+                    <h3 style="margin:0 0 12px 0; color:#0369a1; font-size:16px; display:flex; align-items:center; font-weight:700;">
+                        <span style="font-size:20px; margin-right:10px;">🧠</span> Resumen de nuestro BotStockMarket
+                    </h3>
+                    <p style="color:#334155; font-size:15px; line-height:1.7; margin:0;">{summary_text}</p>
+                    <div style="margin-top:18px;">
+                         <span style="font-size:12px; color:{COLOR_PRIMARY}; background:white; padding:6px 12px; border-radius:20px; font-weight:bold; border:1px solid #bae6fd; box-shadow:0 2px 5px rgba(0,0,0,0.03);">Etiquetas del día: {tags}</span>
+                    </div>
+                </div>
 
-    <h3 style="margin-top:14px;">💼 Acciones Seguimiento</h3>
-    <table style="width:95%;max-width:900px;border-collapse:collapse;">
-        <thead>
-            <tr>
-                <th {left_th}>Ticker</th>
-                <th {right_th}>Precio</th>
-                <th {right_th}>Volumen</th>
-                <th {th_style}>Día</th>
-                <th {th_style}>Mensual</th>
-                <th {th_style}>YTD</th>
-                <th {th_style}>Pred. (24h)</th>
-            </tr>
-        </thead>
-        <tbody>
-            {html_stock_rows}
-        </tbody>
-    </table>
+                <div style="display:flex; gap:25px; flex-wrap:wrap; margin-bottom:30px;">
+                    <div class="card" style="flex:1; min-width:280px;">
+                        <div class="section-title">🏛️ Sectores Clave</div>
+                        <table style="width:100%; border-collapse:collapse;">{sectors_html}</table>
+                    </div>
+                    
+                    <div class="card" style="flex:1; min-width:280px;">
+                        <div class="section-title">📅 Radar del Mercado</div>
+                        <table style="width:100%; border-collapse:collapse;">{calendar_html}</table>
+                    </div>
+                </div>
 
-    <p style="font-size:11px;color:gray;margin-top:18px;">
-        Nota: La predicción es un modelo simple (tendencia + momentum). No constituye asesoramiento financiero.
-    </p>
-    
-    <p style="font-size:12px;color:#999;text-align:center;margin-top:20px;border-top:1px solid #eee;padding-top:10px;">
-        Reporte automático generado con <strong>Python</strong> 🐍
-    </p>
+                <div class="card">
+                    <div class="section-title">📉 Tendencia Visual (3 Meses)</div>
+                    <img src="cid:chart_img" style="width:100%; border-radius:12px; border:1px solid {BORDER_COLOR};">
+                </div>
 
+                <div class="card">
+                    <div class="section-title" style="margin-bottom:15px;">💼 Panel de Acciones</div>
+                    <table style="width:100%; border-collapse:separate; border-spacing: 0; font-size:13px;">
+                        <thead>
+                            <tr style="text-align:left; color:#94a3b8; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">
+                                <th style="padding:0 0 10px 10px;">Ticker</th>
+                                <th style="padding:0 0 10px 10px; text-align:right;">Precio</th>
+                                <th style="padding:0 0 10px 10px; text-align:right;">Var. 24h</th>
+                                <th style="padding:0 0 10px 10px; text-align:right;">Anual (YTD)</th>
+                                <th style="padding:0 0 10px 10px; text-align:center;">Pred. IA</th>
+                            </tr>
+                        </thead>
+                        <tbody>{portfolio_html}</tbody>
+                    </table>
+                </div>
+
+                <div style="text-align:center; font-size:12px; color:#cbd5e1; margin-top:40px;">
+                    <p style="margin:0;">Market Daily Bot v11.0 • Reporte Profesional.</p>
+                </div>
+
+            </div>
+        </div>
     </body>
     </html>
     """
     return html
 
 # ============================
-# ENVIAR EMAIL
-# ============================
-def send_email(subject, html_body, chart_bytes):
-    msg = MIMEMultipart("related")
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_REMITENTE
-    msg["To"] = EMAIL_DESTINATARIO
-    msg_alt = MIMEMultipart("alternative")
-    msg.attach(msg_alt)
-    msg_alt.attach(MIMEText(html_body, "html"))
-    img = MIMEImage(chart_bytes)
-    img.add_header("Content-ID", "<grafico1>")
-    msg.attach(img)
-
-    try:
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
-        server.login(EMAIL_REMITENTE, EMAIL_CONTRASENA)
-        server.sendmail(EMAIL_REMITENTE, EMAIL_DESTINATARIO, msg.as_string())
-        server.quit()
-        print("📨 Email enviado correctamente!")
-    except Exception as e:
-        print("❌ Error enviando email:", e)
-
-# ============================
-# MAIN
+# 🚀 EJECUCIÓN MAIN
 # ============================
 if __name__ == "__main__":
-    print("🛠️  Generando reporte profesional...")
-    html = build_report_html(TICKERS, INDEXES_PRINCIPALES, INDEXES_GLOBALES, SECTOR_ETFS)
-    chart_bytes = crear_grafico_bytes(TICKERS)
-    print("📤 Enviando email...")
-    send_email("📈 Reporte Diario Profesional + Gráfico", html, chart_bytes)
+    print("🔄 Generando Pro Dashboard v11.0...")
+    
+    tiles_data = []
+    macro_changes = {}
+    all_tile_tickers = [t["Ticker"] for t in TILES_CONFIG] + list(MACRO_CONTEXT.values())
+    df_tiles = yf.download(all_tile_tickers, period="5d", group_by='ticker', progress=False, auto_adjust=False)
+    
+    for item in TILES_CONFIG:
+        try:
+            df = df_tiles[item["Ticker"]].ffill()
+            price = float(df['Close'].iloc[-1])
+            prev = float(df['Close'].iloc[-2])
+            chg = ((price - prev)/prev)*100
+            tiles_data.append({"Name": item["Name"], "Icon": item["Icon"], "Price": price, "Change": chg})
+            macro_changes[item["Ticker"]] = chg
+        except: tiles_data.append({"Name": item["Name"], "Icon": item["Icon"], "Price": 0, "Change": 0})
+
+    for k, v in MACRO_CONTEXT.items():
+        try: macro_changes[v] = float(((df_tiles[v]['Close'].iloc[-1] - df_tiles[v]['Close'].iloc[-2])/df_tiles[v]['Close'].iloc[-2])*100)
+        except: pass
+        
+    summary_txt, tags_txt = generar_resumen_inteligente(macro_changes)
+    
+    sectors_data = []
+    df_sec = yf.download(list(SECTOR_ETFS.keys()), period="5d", group_by='ticker', progress=False, auto_adjust=False)
+    for tick, name in SECTOR_ETFS.items():
+        try:
+            chg = float(((df_sec[tick]['Close'].iloc[-1] - df_sec[tick]['Close'].iloc[-2])/df_sec[tick]['Close'].iloc[-2])*100)
+            sectors_data.append({"Name": name, "Change": chg})
+        except: continue
+        
+    market_cal = get_market_calendar()
+    
+    print("📥 Descargando acciones...")
+    portfolio_data = [get_full_stock_data(t) for t in TICKERS]
+    
+    print("🎨 Renderizando HTML...")
+    html_content = build_html(tiles_data, summary_txt, tags_txt, sectors_data, portfolio_data, market_cal)
+    chart_bytes = create_chart(TICKERS)
+    
+    msg = MIMEMultipart("related")
+    msg["Subject"] = f"Market Daily: Resumen Profesional del Mercado | {datetime.now().strftime('%d/%m')}"
+    msg["From"] = EMAIL_CREDENTIALS["user"]
+    msg["To"] = EMAIL_CREDENTIALS["to"]
+    
+    msg_alt = MIMEMultipart('alternative')
+    msg.attach(msg_alt)
+    msg_alt.attach(MIMEText(html_content, "html"))
+    
+    img = MIMEImage(chart_bytes)
+    img.add_header('Content-ID', '<chart_img>')
+    msg.attach(img)
+    
+    try:
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        server.login(EMAIL_CREDENTIALS["user"], EMAIL_CREDENTIALS["pass"])
+        server.sendmail(EMAIL_CREDENTIALS["user"], EMAIL_CREDENTIALS["to"], msg.as_string())
+        server.quit()
+        print("✅ Reporte Enviado: Diseño Pro con Logos y Bordes.")
+    except Exception as e:
+        print(f"❌ Error: {e}")
